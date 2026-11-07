@@ -119,7 +119,14 @@ Two CI details that cost a run each to learn:
   `/etc/paths.d`, which only applies to shells started afterwards; without the explicit
   `PATH`, the first `port` call after installing exits 127;
 - the `file://` source is written as the **first** line of `sources.conf`, removing any
-  previous copy of the entry, so a re-run cannot duplicate it either.
+  previous copy of the entry, so a re-run cannot duplicate it either;
+- MacPorts base is cached by `.github/actions/macports-base`, a composite action both jobs
+  use. It stores `/opt/local` as a tarball taken immediately after the base install —
+  before `port sync` and before any port exists — keyed on runner OS, architecture and
+  MacPorts version, with a looser `restore-keys` fallback. A restore of an older base is
+  fine (the version is logged); a missing or unreadable archive falls through to the
+  usual `.pkg` install. Nothing above the base is cached, so the ports tree and the
+  built ports are never stale.
 
 ## Verified results
 

@@ -1,0 +1,102 @@
+name: MacPorts base
+description: >-
+  Install the MacPorts base on Intel macOS, restoring it from the Actions cache when
+  possible and saving it right after a fresh install, before any ports or ports tree
+  exist. Everything above the base (ports tree sync, built ports) stays uncached so a
+  run never inherits a stale tree.
+
+outputs:
+  version:
+    description: MacPorts base version that ended up installed
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the latest MacPorts release
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -fsSL https://api.github.com/repos/macports/macports-base/releases/latest \
+          -o "$RUNNER_TEMP/macports-release.json"
+        major="$(sw_vers -productVersion | cut -d. -f1)"
+        # No jq on the Intel image, and no Homebrew (it no longer supports Intel macOS).
+        url="$(python3 - "$RUNNER_TEMP/macports-release.json" "$major" <<'PY'
+        import json, sys
+
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            release = json.load(handle)
+        packages = [a["browser_download_url"] for a in release["assets"]
+                    if a["name"].endswith(".pkg")]
+        matching = [u for u in packages if f"-{sys.argv[2]}-" in u]
+        candidates = matching or packages
+        print(candidates[0] if candidates else "")
+        PY
+        )"
+        [ -n "$url" ] || { echo "::error::no MacPorts .pkg asset in the latest release"; exit 1; }
+        version="$(python3 - "$RUNNER_TEMP/macports-release.json" <<'PY'
+        import json, sys
+
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            print(json.load(handle)["tag_name"].lstrip("v"))
+        PY
+        )"
+        echo "url=$url" >> "$GITHUB_OUTPUT"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "osmajor=$major" >> "$GITHUB_OUTPUT"
+        echo "MacPorts base $version from $url"
+
+    - name: Restore the cached MacPorts base
+      id: restore
+      uses: actions/cache/restore@v5
+      with:
+        # A tarball rather than /opt/local itself: the cache action runs unprivileged,
+        # and the installer creates /opt/local as root. Similarly, a tarball can be
+        # written the moment the base exists, before any port has been installed.
+        path: ${{ runner.temp }}/macports-base.tgz
+        # macOS major in the key: a base built for another OS major is not a safe
+        # restore, but a fallback within the same OS major is.
+        key: macports-base-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.osmajor }}-${{ steps.resolve.outputs.version }}
+        restore-keys: |
+          macports-base-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.osmajor }}-
+
+    - name: Unpack the cached base, or install the package
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+        archive="$RUNNER_TEMP/macports-base.tgz"
+
+        if [ "${{ steps.restore.outputs.cache-hit }}" = "true" ] && [ -s "$archive" ]; then
+          echo "restoring /opt/local from $archive"
+          sudo tar -xzf "$archive" -C /
+        fi
+
+        if [ -x /opt/local/bin/port ]; then
+          echo "MacPorts base already present"
+        else
+          echo "installing MacPorts base"
+          curl -fsSL -o "$RUNNER_TEMP/macports.pkg" "${{ steps.resolve.outputs.url }}"
+          sudo installer -pkg "$RUNNER_TEMP/macports.pkg" -target /
+        fi
+        [ -x /opt/local/bin/port ] || { echo "::error::MacPorts base is not usable"; exit 1; }
+
+        # Save the base as it is right now: no ports tree sync, no installed ports.
+        if [ ! -s "$archive" ]; then
+          paths=(opt/local)
+          if [ -f /etc/paths.d/macports ]; then paths+=(etc/paths.d/macports); fi
+          if [ -f /etc/manpaths.d/macports ]; then paths+=(etc/manpaths.d/macports); fi
+          sudo tar -czf "$archive" -C / "${paths[@]}"
+          sudo chmod a+r "$archive"
+          echo "packaged base for the cache: $(du -h "$archive" | cut -f1)"
+        fi
+
+        port version
+
+    - name: Save the MacPorts base
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/macports-base.tgz
+        key: ${{ steps.restore.outputs.cache-primary-key }}

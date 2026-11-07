@@ -83,12 +83,16 @@ EOF
 fi
 
 echo
-echo "Installing from source (-s): vulkan-tools, vulkan-validationlayers"
+echo "Installing vulkan-tools and vulkan-validationlayers"
+# No -s on purpose: the overlays are revision 1, for which no binary archive exists,
+# so MacPorts has to build exactly these from source. -s would also rebuild every
+# dependency (python314, cmake, glslang, spirv-tools) from source for no benefit.
 FAIL_CODE=3
-sudo port -s -N -v install vulkan-tools vulkan-validationlayers || fail "port install failed"
+sudo port -N -v install vulkan-tools vulkan-validationlayers || fail "port install failed"
 
 echo
 for portname in vulkan-tools vulkan-validationlayers vulkan-utility-libraries; do
+  # 'port -q installed' indents each line, hence the [active] match rather than ^name.
   if port -q installed "$portname" 2>/dev/null | grep -q 'active'; then
     ok "$(port -q installed "$portname" | grep active | sed 's/^ *//')"
   else

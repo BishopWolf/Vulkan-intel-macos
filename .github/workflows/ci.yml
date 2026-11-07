@@ -82,19 +82,33 @@ jobs:
       - name: The overridden ports resolve to this overlay
         run: |
           set -euo pipefail
+          # Output formats, learned the hard way:
+          #   port -q info --revision vulkan-tools   ->  "1"            (bare value)
+          #   port      info --revision vulkan-tools ->  "revision: 1"  (labelled)
+          # so parsing "field 2" of the quiet form yields an empty string and the check
+          # fails even when the overlay is winning. Compare the bare value instead, and
+          # use --portdir for the real question: which repository supplied the Portfile.
+          # Output formats, each of which bit this workflow once:
+          #   port -q info --revision vulkan-tools   ->  "1"                     (bare value)
+          #   port      info --revision vulkan-tools ->  "revision: 1"
+          #   port -q info --portdir vulkan-tools    ->  "graphics/vulkan-tools" (relative)
+          #   port -q info --line --name --version --revision vulkan-tools
+          #                                          ->  "vulkan-tools<TAB>1.4.363.0<TAB>1"
+          # So --portdir cannot say which repository won (it is relative to the source),
+          # and the quiet --revision has no second field to parse. The revision is what
+          # proves precedence: macports-ports ships revision 0 for all three ports.
           status=0
-          check_revision() {
-            got="$(port -q info --revision "$1" | awk '{print $2}')"
-            if [ "$got" != "1" ]; then
-              echo "::error::$1 has revision '$got', expected 1: macports-ports is winning over the overlay"
-              status=1
+          for portname in vulkan-tools vulkan-validationlayers vulkan-utility-libraries; do
+            line="$(port -q info --line --name --version --revision "$portname")"
+            revision="$(printf '%s\n' "$line" | awk '{print $3}')"
+            echo "$portname: '$line' (portdir $(port -q info --portdir "$portname"))"
+            if [ "$revision" = "1" ]; then
+              echo "OK    $portname revision 1, supplied by this overlay"
             else
-              echo "OK  $1 revision 1 (overlay in effect)"
+              echo "::error::$portname has revision '$revision', expected 1: macports-ports is winning over the overlay"
+              status=1
             fi
-          }
-          check_revision vulkan-tools
-          check_revision vulkan-validationlayers
-          check_revision vulkan-utility-libraries
+          done
           exit "$status"
 
       - name: Patch applies to the pinned tarball
@@ -156,11 +170,16 @@ jobs:
           echo "file://$GITHUB_WORKSPACE/ports" | sudo tee -a /opt/local/etc/macports/sources.conf
           portindex -f ports
 
-      - name: Install from source
+      - name: Install the overlaid ports
         run: |
           set -euo pipefail
-          sudo port -s -N -v install vulkan-tools vulkan-validationlayers MoltenVK
-          port -q installed | grep -E '^(vulkan-(tools|validationlayers|utility-libraries)|MoltenVK)'
+          # No -s: the three overlay ports are revision 1, and no binary archive exists
+          # for that revision, so MacPorts builds exactly those from source anyway.
+          # Forcing source for every dependency would also rebuild python314, cmake,
+          # glslang, spirv-tools... and blow the job timeout.
+          sudo port -N -v install vulkan-tools vulkan-validationlayers MoltenVK
+          # 'port -q installed' indents its lines, so anchor on whitespace, not on ^name.
+          port -q installed | grep -E '^[[:space:]]*(vulkan-(tools|validationlayers|utility-libraries)|MoltenVK)[[:space:]]'
 
       - name: Test the installed stack
         run: |

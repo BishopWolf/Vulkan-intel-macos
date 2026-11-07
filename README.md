@@ -54,8 +54,10 @@ cd Vulkan-intel-macos
 ```
 
 `install.sh` indexes the local repo, installs `vulkan-tools` and
-`vulkan-validationlayers` **from source** (`port -s`), and prints the resulting
-revision so the overlay is visibly in effect.
+`vulkan-validationlayers`, and prints the resulting revision so the overlay is visibly
+in effect. No `-s` is needed: `revision 1` has no binary archive, so MacPorts builds
+exactly the three overlaid ports from source and still uses archives for their
+dependencies.
 
 Optional, only for applications that `dlopen("libvulkan.dylib")` by name instead of
 linking with an rpath (Python `ctypes`, some Go/Rust bindings, `vulkaninfo` builds

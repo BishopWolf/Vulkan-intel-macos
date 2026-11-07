@@ -55,11 +55,13 @@ runs:
         # and the installer creates /opt/local as root. Similarly, a tarball can be
         # written the moment the base exists, before any port has been installed.
         path: ${{ runner.temp }}/macports-base.tgz
-        # macOS major in the key: a base built for another OS major is not a safe
-        # restore, but a fallback within the same OS major is.
+        # Exact key on purpose: macOS major is in it because a base built for another
+        # OS major is not a safe restore, and there is no restore-keys fallback because
+        # a partial hit would leave the older tarball on disk and it would then be
+        # re-saved under the new MacPorts version's key - the key would claim a version
+        # the archive does not contain. A MacPorts release therefore rebuilds the cache
+        # once instead of silently serving the previous base.
         key: macports-base-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.osmajor }}-${{ steps.resolve.outputs.version }}
-        restore-keys: |
-          macports-base-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.osmajor }}-
 
     - name: Unpack the cached base, or install the package
       id: install

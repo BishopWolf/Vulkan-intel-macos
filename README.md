@@ -122,11 +122,12 @@ Two CI details that cost a run each to learn:
   previous copy of the entry, so a re-run cannot duplicate it either;
 - MacPorts base is cached by `.github/actions/macports-base`, a composite action both jobs
   use. It stores `/opt/local` as a tarball taken immediately after the base install —
-  before `port sync` and before any port exists — keyed on runner OS, architecture and
-  MacPorts version, with a looser `restore-keys` fallback. A restore of an older base is
-  fine (the version is logged); a missing or unreadable archive falls through to the
-  usual `.pkg` install. Nothing above the base is cached, so the ports tree and the
-  built ports are never stale.
+  before `port sync` and before any port exists — keyed on runner OS, architecture, macOS
+  major and MacPorts version, exact match only: a partial hit would leave an older base
+  in place and re-save it under the newer version's key, so a MacPorts release instead
+  rebuilds the cache once. A missing or unreadable archive falls through to the usual
+  `.pkg` install. Nothing above the base is cached, so the ports tree and the built ports
+  are never stale.
 
 ## Verified results
 

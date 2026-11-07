@@ -27,9 +27,19 @@ a `patchfiles-append` would still be satisfied by the official archive and silen
 skip the patch. Every port here therefore carries `revision 1`. Because no archive
 exists for that revision, MacPorts builds it from source.
 
-`sources.conf` gives `[default]` entries the *lowest* priority, so adding this repo
-as a plain `file://` entry is enough for it to override `macports-ports` for the
-three port names it provides.
+Source order matters, and appending is not enough: MacPorts resolves a duplicated port
+name to the **first** source in `sources.conf` (the header shipped in that file states
+it, and the guide's "just append a `file://` line" recipe is for throwaway local
+testing). The overlay therefore has to be the first line, with `[nosync]` so that
+`port sync` does not try to git-pull the checkout:
+
+```
+file:///path/to/Vulkan-intel-macos/ports [nosync]
+rsync://rsync.macports.org/macports/release/tarballs/ports.tar.gz [default]
+```
+
+`install.sh --add-source` rewrites the file that way, idempotently, and refuses to
+continue if the overlay is registered but not first.
 
 ## Requirements
 
@@ -107,7 +117,9 @@ Two CI details that cost a run each to learn:
   supported`, and `upload-artifact@v5` is still Node 20 — its first Node 24 major is v6;
 - `PATH` is set at job level. The MacPorts installer adds `/opt/local/bin` through
   `/etc/paths.d`, which only applies to shells started afterwards; without the explicit
-  `PATH`, the first `port` call after installing exits 127.
+  `PATH`, the first `port` call after installing exits 127;
+- the `file://` source is written as the **first** line of `sources.conf`, removing any
+  previous copy of the entry, so a re-run cannot duplicate it either.
 
 ## Verified results
 

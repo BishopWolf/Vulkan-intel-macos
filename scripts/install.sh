@@ -61,21 +61,33 @@ portindex "$PORTS" || fail "portindex rejected the Portfiles in $PORTS"
 [ -f "$PORTS/PortIndex" ] || fail "portindex did not produce $PORTS/PortIndex"
 ok "PortIndex built ($(grep -c '^vulkan-' "$PORTS/PortIndex" || true) vulkan entries)"
 
-# A plain file:// entry outranks the [default] macports-ports entry, which is what
-# makes the revision-bumped overlays win for the same port names.
-if grep -qF "$REPO_URL" "$SOURCES_CONF"; then
-  ok "overlay already registered in $SOURCES_CONF"
+# MacPorts resolves a duplicated port name to the FIRST source in sources.conf (the
+# comments shipped in that file say so). Appending a file:// entry - the pattern the
+# MacPorts guide shows for a throwaway local test - therefore does NOT shadow
+# macports-ports for the three names this overlay provides. [nosync] keeps
+# 'sudo port sync' from trying to git-pull this checkout.
+ENTRY="$REPO_URL [nosync]"
+first_source="$(sed -n '/^[[:space:]]*[^#[:space:]]/p' "$SOURCES_CONF" | head -1)"
+if [ "$first_source" = "$ENTRY" ] || [ "$first_source" = "$REPO_URL" ]; then
+  ok "overlay is the first source in $SOURCES_CONF"
 elif [ "$ADD_SOURCE" = "1" ]; then
-  echo "$REPO_URL" | sudo tee -a "$SOURCES_CONF" >/dev/null
-  ok "registered overlay in $SOURCES_CONF"
+  tmp="$(mktemp)"
+  {
+    printf '%s\n' "$ENTRY"
+    grep -vF "$REPO_URL" "$SOURCES_CONF" || true
+  } > "$tmp"
+  sudo tee "$SOURCES_CONF" < "$tmp" >/dev/null
+  rm -f "$tmp"
+  ok "registered overlay as the first source in $SOURCES_CONF"
 else
   cat <<EOF
-FAIL  the overlay is not registered, so 'port install vulkan-tools' would build the
-      unpatched macports-ports version.
+FAIL  the overlay is not the first source in $SOURCES_CONF, so macports-ports still
+      wins for vulkan-tools, vulkan-validationlayers and vulkan-utility-libraries:
+      MacPorts uses the first source that defines a port name.
 
-      Add this line to $SOURCES_CONF:
+      Add this line ABOVE the rsync [default] line:
 
-          $REPO_URL
+          $ENTRY
 
       then re-run, or let the script do it:  ./scripts/install.sh --add-source
 EOF

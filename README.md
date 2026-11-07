@@ -103,12 +103,15 @@ available until August 2027):
   `.pkg`, indexes this overlay with `portindex`, and asserts that each overridden port
   is parsed with the expected `revision` and that no checksum/patch entry is missing.
   This catches Portfile syntax errors without a 30-minute build.
-- **`install`** — `workflow_dispatch` and weekly: does the real thing, a source build
-  of `vulkan-tools`, `vulkan-validationlayers` and `MoltenVK` through the local
-  overlay, then runs `tests/run_tests.sh` against the freshly installed stack.
+- **`install`** — every push, pull request, `workflow_dispatch` and the weekly cron:
+  does the real thing, a source build of `vulkan-tools`, `vulkan-validationlayers` and
+  `MoltenVK` through the local overlay, then runs `tests/run_tests.sh` against the
+  freshly installed stack.
 
-The full build job is deliberately not on every push: building MoltenVK plus the
-validation layers from source takes around half an hour.
+It was originally restricted to `workflow_dispatch`/`schedule`, which is why pushes
+reported it as **skipped** without running a step. A failing `portfiles` job skips it
+too, through `needs`. The cost is real — MoltenVK plus the validation layers from
+source is roughly half an hour — but a green `portfiles` never proved the ports build.
 
 Two CI details that cost a run each to learn:
 

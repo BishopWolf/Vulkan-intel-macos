@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * 1"     # weekly: the full from-source port build and tests
+    - cron: "0 6 * * 1"     # weekly drift check; the build also runs on every push
 
 permissions:
   contents: read
@@ -121,7 +121,9 @@ jobs:
   install:
     name: Build ports from source and test
     needs: portfiles
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Runs on every event once Portfiles passes. This used to be gated to
+    # workflow_dispatch/schedule, which is why every push reported it as "skipped"
+    # without running a single step; a failing Portfiles job skips it too, via 'needs'.
     runs-on: macos-15-intel
     timeout-minutes: 150
     steps:

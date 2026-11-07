@@ -86,20 +86,37 @@ jobs:
           done
           exit "$status"
 
-      - name: Patch applies to the pinned tarball
+      - name: Lint the Portfiles the way macports-ports does
         run: |
           set -euo pipefail
-          sudo port -q extract vulkan-tools
-          # Locate the source root by its vulkaninfo directory rather than assuming the
-          # archive's top-level name (the tag is vulkan-sdk-1.4.363.0, the distfile is
-          # Vulkan-Tools-1.4.363.0).
-          src="$(find /opt/local/var/macports/build -maxdepth 5 -type d -name vulkaninfo \
-                    -path '*vulkan-tools*' 2>/dev/null | head -1)"
-          [ -n "$src" ] || { echo "::error::extracted Vulkan-Tools source not found"; exit 1; }
-          src="$(dirname "$src")"
-          echo "source root: $src"
-          patch -p1 --dry-run --directory "$src" \
-            --input "$GITHUB_WORKSPACE/ports/graphics/vulkan-tools/files/patch-vulkaninfo-layered-api-sType.diff"
+          # These Portfiles are what scripts/prepare-macports-pr.sh submits upstream, so
+          # they have to stay nitpick-clean.
+          status=0
+          for port in vulkan-tools vulkan-validationlayers vulkan-utility-libraries; do
+            echo "== $port"
+            ( cd "ports/graphics/$port" && port lint --nitpick ) || status=1
+          done
+          exit "$status"
+
+      - name: Patches apply to the pinned tarballs
+        run: |
+          set -euo pipefail
+          # MacPorts applies patches with -p0 by default, so these carry no a/ b/ prefixes.
+          # Find each source root by a directory the patch touches instead of assuming the
+          # archive's top-level name (tag vulkan-sdk-1.4.363.0, distfile Vulkan-Tools-...).
+          check_patch() {
+            local port="$1" marker="$2" patchfile="$3" src
+            sudo port -q extract "$port"
+            src="$(find /opt/local/var/macports/build -maxdepth 5 -type d -name "$marker" \
+                        -path "*$port*" 2>/dev/null | head -1)"
+            [ -n "$src" ] || { echo "::error::$port: extracted source not found"; return 1; }
+            src="$(dirname "$src")"
+            echo "$port source root: $src"
+            patch -p0 --dry-run --directory "$src" \
+              --input "$GITHUB_WORKSPACE/ports/graphics/$port/files/$patchfile"
+          }
+          check_patch vulkan-tools vulkaninfo patch-vulkaninfo-layered-api-sType.diff
+          check_patch vulkan-validationlayers layers patch-validationlayers-absolute-manifest-path.diff
 
   install:
     name: Build ports from source and test

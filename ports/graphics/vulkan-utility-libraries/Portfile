@@ -1,49 +1,44 @@
 # -*- coding: utf-8; mode: tcl; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- vim:fenc=utf-8:ft=tcl:et:sw=4:ts=4:sts=4
+
 PortSystem          1.0
 PortGroup           github 1.0
 PortGroup           cmake 1.1
 
-# Overlay of the macports-ports 'vulkan-utility-libraries' port
-# (graphics/vulkan-utility-libraries).
-#
-# Difference from upstream: revision 1 only, no source change.
-#
-# The MacPorts binary archive for this noarch port was built on an arm64 host, so it
-# installs libVulkanSafeStruct.a and libVulkanLayerSettings.a containing arm64 objects
-# only. Linking the x86_64 validation layer against them fails with
-#
-#   ld: warning: ignoring file '.../libVulkanSafeStruct.a(...)':
-#       found architecture 'arm64', required architecture 'x86_64'
-#   Undefined symbols for architecture x86_64: vkuGetLayerSettingValue(...)
-#
-# and 'port install' reports the validation layer as broken. Bumping the revision
-# means no binary archive can satisfy the requirement, so MacPorts builds these small
-# static libraries from source on the host - the correct architecture by construction.
-# 'port -s' in scripts/install.sh asks for the same thing explicitly; the revision
-# bump makes it true for anyone who installs without -s as well.
-
 github.setup        KhronosGroup Vulkan-Utility-Libraries 1.4.363.0 vulkan-sdk-
 github.tarball_from archive
 name                vulkan-utility-libraries
+# 1: dropping 'noarch' below changes which binary archive can satisfy this port.
 revision            1
+
 categories          graphics
 license             Apache-2
-maintainers         nomaintainer
-description         Utility libraries for Vulkan developers (source-built overrides)
-long_description    ${description}
-homepage            https://vulkan.lunarg.com
 platforms           any
-supported_archs     noarch
+maintainers         {judaew @judaew} openmaintainer
+
+description         Utility libraries for Vulkan developers
+long_description    {*}${description}
+homepage            https://vulkan.lunarg.com
 
 checksums           rmd160  546acc189cef466e0298e0d27323780eacee0ed8 \
                     sha256  a5308b62e3bac84cf45c4d7dd5b830aabace4847fdb71f4fd7db3be034c2bebf \
                     size    1346915
 
-cmake.build_type    Release
-depends_build-append port:vulkan-headers
+# These are static archives of compiled objects, not headers. Tagged 'supported_archs
+# noarch', the port was built once on an arm64 host and that archive was then served to
+# x86_64 clients, where linking the validation layer fails with
+#
+#   ignoring file '.../libVulkanSafeStruct.a(...)': found architecture 'arm64',
+#   required architecture 'x86_64'
+#   Undefined symbols for architecture x86_64: vkuGetLayerSettingValue(...)
+#
+# Leaving supported_archs at its default makes the port build and cache per architecture.
 
-set py_ver 3.14
-set py_ver_nodot [string map {. {}} ${py_ver}]
+cmake.build_type    Release
+
+depends_build-append       port:vulkan-headers
+
+set py_ver          3.14
+set py_ver_nodot    [string map {. {}} ${py_ver}]
 foreach stage {configure build destroot test} {
     ${stage}.env-append PATH=${frameworks_dir}/Python.framework/Versions/${py_ver}/bin:$env(PATH)
 }

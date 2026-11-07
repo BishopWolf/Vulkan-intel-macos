@@ -10,36 +10,66 @@ three at install time:
 
 | # | Defect | Symptom | Fix here |
 | --- | --- | --- | --- |
-| 1 | `vulkan-utility-libraries` ships `arm64`-only static archives in the MacPorts binary archive (it is a `noarch` port, so nothing flags the mismatch) | `vulkan-validationlayers` fails to link: `ignoring file 'libVulkanSafeStruct.a' ... found architecture 'arm64', required architecture 'x86_64'` | local `Portfile` with a revision bump, so the x86_64 build happens from source |
-| 2 | Validation layer manifest uses a bare `library_path` (`libVkLayer_khronos_validation.dylib`) | loader fails to `dlopen` the layer on macOS: `dlopen(libVkLayer_khronos_validation.dylib, 0x0005): no such file`, and a `/usr/local/lib` symlink does **not** help | `post-destroot` rewrites the manifest to an absolute path |
-| 3 | `vulkaninfo` never initialises `pLayeredApis[i].sType` | with `VK_LAYER_KHRONOS_validation` enabled every run reports `vkGetPhysicalDeviceProperties2KHR(): pProperties->pNext<VkPhysicalDeviceLayeredApiPropertiesListKHR>.pLayeredApis[0].sType must be VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_PROPERTIES_KHR` for each device | patch to `vulkaninfo/generated/vulkaninfo.hpp` in the port |
+| 1 | `vulkan-utility-libraries` ships `arm64`-only static archives in the MacPorts binary archive (it is a `noarch` port, so nothing flags the mismatch) | `vulkan-validationlayers` fails to link: `ignoring file 'libVulkanSafeStruct.a' ... found architecture 'arm64', required architecture 'x86_64'` | `supported_archs noarch` dropped in the port, so the archive is built and cached per architecture |
+| 2 | Validation layer manifest uses a bare `library_path` (`libVkLayer_khronos_validation.dylib`) | loader fails to `dlopen` the layer on macOS: `dlopen(libVkLayer_khronos_validation.dylib, 0x0005): no such file`, and a `/usr/local/lib` symlink does **not** help | `layers/CMakeLists.txt` patched so the install manifest is generated with an absolute `library_path` |
+| 3 | `vulkaninfo` never initialises `pLayeredApis[i].sType` | with `VK_LAYER_KHRONOS_validation` enabled every run reports `vkGetPhysicalDeviceProperties2KHR(): pProperties->pNext<VkPhysicalDeviceLayeredApiPropertiesListKHR>.pLayeredApis[0].sType must be VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_PROPERTIES_KHR` for each device | patch to `vulkaninfo/generated/vulkaninfo.hpp`, the generated source the build compiles |
 
 All three are reproducible on the pinned versions in this repository
 (Vulkan 1.4.363, MoltenVK 1.4.2, MacPorts 2.12.x) and none of them are caused by
 local configuration.
 
-## Why a port and not install scripts
+## Why Portfile changes, and how they are published
 
-Defects 1 and 2 live in the *installed files* of two ports, so the durable place to
-fix them is the ports themselves. MacPorts also matches prebuilt binary archives on
-name + version + **revision** + variant: a plain copy of the upstream `Portfile` with
-a `patchfiles-append` would still be satisfied by the official archive and silently
-skip the patch. Every port here therefore carries `revision 1`. Because no archive
-exists for that revision, MacPorts builds it from source.
+All three defects live in files that a port installs, so the durable fix is in the ports
+— and all three target ports already exist in `macports-ports`. This repository is
+therefore both a local overlay and the patch set for an upstream pull request:
+`ports/graphics/<port>` is the upstream `Portfile` with only the change under review
+added, nothing else reformatted. `port lint --nitpick` reports 0 errors and 0 warnings on
+all three.
 
-Source order matters, and appending is not enough: MacPorts resolves a duplicated port
-name to the **first** source in `sources.conf` (the header shipped in that file states
-it, and the guide's "just append a `file://` line" recipe is for throwaway local
-testing). The overlay therefore has to be the first line, with `[nosync]` so that
-`port sync` does not try to git-pull the checkout:
+`revision 1` is part of the change, not a local trick. It is what MacPorts asks for when
+a port's installed files change, and it has a useful side effect: binary archives are
+matched on name + version + revision + variant, so no existing archive can satisfy the
+patched ports and both CI and a local `port install` build them from source.
+
+Two of the three need a patch file. Both are `-p0` diffs against the release tarball,
+which is what MacPorts applies by default:
+
+| Port | Patch | Why there |
+| --- | --- | --- |
+| `vulkan-tools` | `vulkaninfo/generated/vulkaninfo.hpp` | the build compiles this checked-in generated source; the `TOOLS_CODEGEN` target is off by default and not part of the default build |
+| `vulkan-validationlayers` | `layers/CMakeLists.txt` | the install-time manifest is produced by `configure_file`, so fixing the template input fixes every install rather than one destroot |
+
+The overlay still has to be the **first** source in `sources.conf`: MacPorts resolves a
+duplicated port name to the first source (the header shipped in that file states it, and
+the guide's "just append a `file://` line" recipe is for throwaway local testing).
+`install.sh --add-source` writes it that way, idempotently, and refuses to continue if
+the overlay is registered but not first.
+
+## Publishing to MacPorts
+
+```bash
+# 1. fork https://github.com/macports/macports-ports and clone your fork at master
+git clone https://github.com/<you>/macports-ports
+# 2. stage this repository's ports over it: copies each port, lints it, one commit per port
+./scripts/prepare-macports-pr.sh ../macports-ports
+# 3. push the branch and open the pull request
+git -C ../macports-ports push --set-upstream origin vulkan-intel-fixes
+```
+
+The script creates one commit per port, in the subject format `macports-ports` asks for:
 
 ```
-file:///path/to/Vulkan-intel-macos/ports [nosync]
-rsync://rsync.macports.org/macports/release/tarballs/ports.tar.gz [default]
+graphics/vulkan-tools: fix uninitialised pLayeredApis sType in vulkaninfo
+graphics/vulkan-validationlayers: install an absolute library_path in the layer manifest
+graphics/vulkan-utility-libraries: build per architecture instead of noarch
 ```
 
-`install.sh --add-source` rewrites the file that way, idempotently, and refuses to
-continue if the overlay is registered but not first.
+They are independent, so a reviewer can take one and ask for changes on another. Each
+claim needs its evidence in the pull request: the `vulkaninfo` VUID before and after, the
+loader's `dlopen` failure for the bare manifest name on an Intel Mac, and the
+`ld: found architecture 'arm64', required architecture 'x86_64'` failure a noarch archive
+causes. All three are in *Verified results* below and in `tests/run_tests.sh`.
 
 ## Requirements
 
@@ -134,6 +164,9 @@ Details that each cost a CI run to learn:
   `port sync failed: Unknown user given`. Installing from the cached package takes about
   half a minute and always produces a complete base, which `port version` then confirms.
   Nothing above the base is cached, so the ports tree and the built ports are never stale;
+- every push lints the three Portfiles with `port lint --nitpick` and dry-runs both
+  patches against the pinned release tarballs, so a submission cannot rot between
+  releases: a stale patch fails the job instead of surfacing in review;
 - `port sync` is the only network step left. Registration retries it with backoff and, if
   it still fails, falls back to a shallow HTTPS clone of `macports-ports` indexed with
   `portindex` — that repository ships no `PortIndex`, and port 873 may simply be
@@ -162,8 +195,10 @@ deviceName = Intel(R) UHD Graphics 630
 ## Limitations
 
 - The `vulkaninfo` patch is pinned to Vulkan 1.4.363.0. Upstream still has the bug on
-  `main`, so re-check the anchor when bumping the port; the patch fails loudly instead
-  of applying to the wrong place (`patch.pre_args -p1` against the generated header).
+  `main`, so re-check the anchor when bumping the port; `patch` applies it with the
+  default `-p0` and fails loudly on a context mismatch instead of patching something
+  else. `scripts/generators/vulkaninfo_generator.py` has the same omission, so a fix
+  there would let the patch be dropped.
 - Validation layers are optional for running Vulkan; they only add API debugging.
   TorchVulkan/Slicer (the original motivation for this) do not depend on them.
 - MoltenVK, the ICD on macOS, is installed by MacPorts as a dependency of the loader;

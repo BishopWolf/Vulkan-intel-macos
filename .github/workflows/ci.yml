@@ -47,13 +47,12 @@ jobs:
       # Composite action: resolves the release, restores the cached base or installs
       # it, then saves the base-only tarball before anything else is added.
       - name: Install MacPorts base (cached)
-        id: base
         uses: ./.github/actions/macports-base
 
       - name: Register the overlay ahead of macports-ports
-        # One script for both jobs: it syncs the ports tree with retries and two
-        # fallbacks, prepends the overlay to sources.conf and indexes it.
-        run: bash scripts/register-overlay.sh "${{ steps.base.outputs.url }}"
+        # One script for both jobs: it syncs the ports tree with retries and a clone
+        # fallback, prepends the overlay to sources.conf and indexes it.
+        run: bash scripts/register-overlay.sh
 
       - name: The overridden ports resolve to this overlay
         run: |
@@ -118,11 +117,10 @@ jobs:
           [ "$(uname -m)" = "x86_64" ] || { echo "::error::this repository is Intel-only"; exit 1; }
 
       - name: Install MacPorts base (cached)
-        id: base
         uses: ./.github/actions/macports-base
 
       - name: Register the overlay ahead of macports-ports
-        run: bash scripts/register-overlay.sh "${{ steps.base.outputs.url }}"
+        run: bash scripts/register-overlay.sh
 
       - name: Install the overlaid ports
         run: |

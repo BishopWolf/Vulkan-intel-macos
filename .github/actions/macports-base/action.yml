@@ -1,9 +1,9 @@
 name: MacPorts base
 description: >-
-  Install the MacPorts base on Intel macOS, restoring it from the Actions cache when
-  possible and saving it right after a fresh install, before any ports or ports tree
-  exist. Everything above the base (ports tree sync, built ports) stays uncached so a
-  run never inherits a stale tree.
+  Install the MacPorts base on Intel macOS, caching the official .pkg download. What is
+  cached is the package, not an installed tree: the installer also creates the 'macports'
+  system user, so an /opt/local snapshot restore leaves files owned by a user that does
+  not exist and 'port sync' dies with "Unknown user given" as soon as it drops privileges.
 
 outputs:
   version:
@@ -50,74 +50,38 @@ runs:
         echo "osmajor=$major" >> "$GITHUB_OUTPUT"
         echo "MacPorts base $version from $url"
 
-    - name: Restore the cached MacPorts base
+    - name: Restore the cached package
       id: restore
       uses: actions/cache/restore@v5
       with:
-        # A tarball rather than /opt/local itself: the cache action runs unprivileged,
-        # and the installer creates /opt/local as root. Similarly, a tarball can be
-        # written the moment the base exists, before any port has been installed.
-        path: ${{ runner.temp }}/macports-base.tgz
-        # Exact key on purpose: macOS major is in it because a base built for another
-        # OS major is not a safe restore, and there is no restore-keys fallback because
-        # a partial hit would leave the older tarball on disk and it would then be
-        # re-saved under the new MacPorts version's key - the key would claim a version
-        # the archive does not contain. A MacPorts release therefore rebuilds the cache
-        # once instead of silently serving the previous base.
-        key: macports-base-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.osmajor }}-${{ steps.resolve.outputs.version }}
+        path: ${{ runner.temp }}/macports.pkg
+        # Exact key on purpose: macOS major is in it because a package built for another
+        # OS major is not a safe install, and there is no restore-keys fallback because a
+        # partial hit would leave an older package on disk and it would then be saved
+        # under the new version's key - the key would claim a version the file is not.
+        key: macports-pkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.osmajor }}-${{ steps.resolve.outputs.version }}
 
-    - name: Unpack the cached base, or install the package
-      id: install
+    - name: Install the base
       shell: bash
       run: |
         set -euo pipefail
-        archive="$RUNNER_TEMP/macports-base.tgz"
-
-        install_from_package() {
-          echo "installing MacPorts base from the package"
-          curl -fsSL -o "$RUNNER_TEMP/macports.pkg" "${{ steps.resolve.outputs.url }}"
-          sudo installer -pkg "$RUNNER_TEMP/macports.pkg" -target /
-        }
-
-        if [ "${{ steps.restore.outputs.cache-hit }}" = "true" ] && [ -s "$archive" ]; then
-          # Verify before extracting: a truncated cache entry would otherwise leave a
-          # half-restored /opt/local that only fails later, in an unrelated step.
-          if gzip -t "$archive" 2>/dev/null; then
-            echo "restoring /opt/local from $archive"
-            sudo tar -xzf "$archive" -C /
-          else
-            echo "::warning::cached base archive is corrupt, discarding it"
-            rm -f "$archive"
-          fi
-        fi
-
-        if [ ! -x /opt/local/bin/port ]; then install_from_package; fi
-        [ -x /opt/local/bin/port ] || { echo "::error::MacPorts base is not usable"; exit 1; }
-
-        # A restore can unpack cleanly and still be unusable, so smoke-test the base and
-        # fall back to the package rather than let a later step fail inexplicably.
-        if base_version="$(port version 2>&1)"; then
-          echo "$base_version"
+        trap 'rc=$?; echo "::error::failed at line $LINENO (exit $rc): $BASH_COMMAND"' ERR
+        pkg="$RUNNER_TEMP/macports.pkg"
+        if [ -s "$pkg" ]; then
+          echo "installing MacPorts base from the cached package"
         else
-          echo "::warning::restored base is not usable ($base_version), installing from the package"
-          install_from_package
+          echo "downloading MacPorts base package"
+          curl -fsSL -o "$pkg" "${{ steps.resolve.outputs.url }}"
         fi
-
-        # Save the base as it is right now: no ports tree sync, no installed ports.
-        if [ ! -s "$archive" ]; then
-          paths=(opt/local)
-          if [ -f /etc/paths.d/macports ]; then paths+=(etc/paths.d/macports); fi
-          if [ -f /etc/manpaths.d/macports ]; then paths+=(etc/manpaths.d/macports); fi
-          sudo tar -czf "$archive" -C / "${paths[@]}"
-          sudo chmod a+r "$archive"
-          echo "packaged base for the cache: $(du -h "$archive" | cut -f1)"
-        fi
-
+        # Always install rather than unpack a saved tree: the installer creates the
+        # 'macports' user (uid 502, group 501) that 'port' drops privileges to.
+        sudo installer -pkg "$pkg" -target /
+        [ -x /opt/local/bin/port ] || { echo "::error::MacPorts base is not usable"; exit 1; }
         port version
 
-    - name: Save the MacPorts base
+    - name: Save the package
       if: steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5
       with:
-        path: ${{ runner.temp }}/macports-base.tgz
+        path: ${{ runner.temp }}/macports.pkg
         key: ${{ steps.restore.outputs.cache-primary-key }}

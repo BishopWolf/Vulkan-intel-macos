@@ -125,20 +125,19 @@ Details that each cost a CI run to learn:
   previous copy of the entry, so a re-run cannot duplicate it either. Ordering, indexing
   and the sync fallbacks live in `scripts/register-overlay.sh`, which both jobs call;
 - MacPorts base is cached by `.github/actions/macports-base`, a composite action both jobs
-  use. It stores `/opt/local` as a tarball taken immediately after the base install —
-  before `port sync` and before any port exists — keyed on runner OS, architecture, macOS
-  major and MacPorts version, exact match only: a partial hit would leave an older base
-  in place and re-save it under the newer version's key, so a MacPorts release instead
-  rebuilds the cache once. The archive is `gzip -t`-checked before extracting and the
-  restored base is smoke-tested with `port version`; either failure discards it and
-  installs the `.pkg` instead. Nothing above the base is cached, so the ports tree and
-  the built ports are never stale;
-- `port sync` is the only network step, and the only thing that has failed for real: on
-  the first cache-hit run it failed three attempts in a row. Registration retries it with
-  backoff, then reinstalls the base from the `.pkg` (the restored base is what differs
-  from a run that worked), then falls back to a shallow HTTPS clone of `macports-ports`
-  indexed with `portindex` — that repository ships no `PortIndex`, and port 873 may
-  simply be unreachable from the runner;
+  use — but it caches the official `.pkg` **download**, not an installed `/opt/local`,
+  keyed on runner OS, architecture, macOS major and MacPorts version (exact match, no
+  `restore-keys`). Caching a snapshot of the installed base was tried first and is wrong:
+  the installer also creates the `macports` system user (uid 502, group 501, home
+  `/opt/local/var/macports/home`), so a restored snapshot contains files owned by a user
+  that does not exist on a fresh runner, and the first privilege drop dies with
+  `port sync failed: Unknown user given`. Installing from the cached package takes about
+  half a minute and always produces a complete base, which `port version` then confirms.
+  Nothing above the base is cached, so the ports tree and the built ports are never stale;
+- `port sync` is the only network step left. Registration retries it with backoff and, if
+  it still fails, falls back to a shallow HTTPS clone of `macports-ports` indexed with
+  `portindex` — that repository ships no `PortIndex`, and port 873 may simply be
+  unreachable from the runner;
 - every step traps `ERR` and annotates the failing command and its line. Actions logs are
   not readable without authentication, and the default annotation, `Process completed
   with exit code 1`, does not say what broke.

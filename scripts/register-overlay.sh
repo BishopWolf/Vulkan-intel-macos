@@ -6,10 +6,6 @@
 # Appending it - the form the MacPorts guide shows for a throwaway local test - leaves
 # macports-ports winning and every port resolving to revision 0.
 #
-# Usage: register-overlay.sh [macports-pkg-url]
-# The URL is only used if 'port sync' cannot fetch the ports tree, to rebuild a base
-# that may have been restored from the Actions cache in a broken state.
-#
 # MACPORTS_ROOT exists so this script can be exercised against a scratch tree.
 set -euo pipefail
 
@@ -18,8 +14,6 @@ sources="$root/etc/macports/sources.conf"
 ports_tree="$root/var/macports/sources/github.com/macports/macports-ports"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 overlay="file://$repo/ports [nosync]"
-pkg_url="${1:-}"
-tmp_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 
 # Annotations are the only channel this step has: raw Actions logs need auth, and a
 # bare "Process completed with exit code 1" does not say which command died.
@@ -44,24 +38,16 @@ for attempt in 1 2 3; do
   sleep $((attempt * 15))
 done
 
-# A base restored from the cache is the one thing that differs from a run that worked,
-# so rebuild it from the package before blaming the network.
-if [ "$synced" != 1 ] && [ -n "$pkg_url" ]; then
-  echo "::warning::sync keeps failing, reinstalling the MacPorts base from the package"
-  curl -fsSL -o "$tmp_dir/macports.pkg" "$pkg_url"
-  sudo installer -pkg "$tmp_dir/macports.pkg" -target /
-  if sync_ports "port sync failed on a freshly installed base"; then synced=1; fi
-fi
-
 if [ "$synced" != 1 ]; then
-  # Last resort: fetch the ports tree over HTTPS. macports-ports is a git repository
-  # whose root doubles as a valid file:// source, so a shallow clone can stand in for
-  # the rsync tree when port 873 is unreachable from the runner.
+  # Fallback: fetch the ports tree over HTTPS. macports-ports is a git repository whose
+  # root doubles as a valid file:// source, so a shallow clone stands in for the rsync
+  # tree when port 873 is unreachable from the runner.
   echo "::warning::falling back to a shallow clone of macports-ports over HTTPS"
   sudo mkdir -p "$(dirname "$ports_tree")"
   sudo rm -rf "$ports_tree"
   sudo git clone --depth 1 --quiet https://github.com/macports/macports-ports.git "$ports_tree"
   if [ ! -f "$ports_tree/PortIndex" ]; then
+    # The repository does not ship a PortIndex, so build one.
     sudo portindex "$ports_tree" \
       || { echo "::error::cannot build a PortIndex for the cloned ports tree"; exit 1; }
   fi

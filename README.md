@@ -113,7 +113,7 @@ reported it as **skipped** without running a step. A failing `portfiles` job ski
 too, through `needs`. The cost is real — MoltenVK plus the validation layers from
 source is roughly half an hour — but a green `portfiles` never proved the ports build.
 
-Two CI details that cost a run each to learn:
+Details that each cost a CI run to learn:
 
 - the actions must be `checkout@v6` / `upload-artifact@v7`. GitHub removed the Node 20
   runtime from hosted runners on 2026-09-23, so `@v4` fails with `Node 20 is not
@@ -122,15 +122,26 @@ Two CI details that cost a run each to learn:
   `/etc/paths.d`, which only applies to shells started afterwards; without the explicit
   `PATH`, the first `port` call after installing exits 127;
 - the `file://` source is written as the **first** line of `sources.conf`, removing any
-  previous copy of the entry, so a re-run cannot duplicate it either;
+  previous copy of the entry, so a re-run cannot duplicate it either. Ordering, indexing
+  and the sync fallbacks live in `scripts/register-overlay.sh`, which both jobs call;
 - MacPorts base is cached by `.github/actions/macports-base`, a composite action both jobs
   use. It stores `/opt/local` as a tarball taken immediately after the base install —
   before `port sync` and before any port exists — keyed on runner OS, architecture, macOS
   major and MacPorts version, exact match only: a partial hit would leave an older base
   in place and re-save it under the newer version's key, so a MacPorts release instead
-  rebuilds the cache once. A missing or unreadable archive falls through to the usual
-  `.pkg` install. Nothing above the base is cached, so the ports tree and the built ports
-  are never stale.
+  rebuilds the cache once. The archive is `gzip -t`-checked before extracting and the
+  restored base is smoke-tested with `port version`; either failure discards it and
+  installs the `.pkg` instead. Nothing above the base is cached, so the ports tree and
+  the built ports are never stale;
+- `port sync` is the only network step, and the only thing that has failed for real: on
+  the first cache-hit run it failed three attempts in a row. Registration retries it with
+  backoff, then reinstalls the base from the `.pkg` (the restored base is what differs
+  from a run that worked), then falls back to a shallow HTTPS clone of `macports-ports`
+  indexed with `portindex` — that repository ships no `PortIndex`, and port 873 may
+  simply be unreachable from the runner;
+- every step traps `ERR` and annotates the failing command and its line. Actions logs are
+  not readable without authentication, and the default annotation, `Process completed
+  with exit code 1`, does not say what broke.
 
 ## Verified results
 

@@ -9,6 +9,9 @@ outputs:
   version:
     description: MacPorts base version that ended up installed
     value: ${{ steps.resolve.outputs.version }}
+  url:
+    description: Download URL of the MacPorts .pkg this run resolved
+    value: ${{ steps.resolve.outputs.url }}
 
 runs:
   using: composite
@@ -70,19 +73,35 @@ runs:
         set -euo pipefail
         archive="$RUNNER_TEMP/macports-base.tgz"
 
-        if [ "${{ steps.restore.outputs.cache-hit }}" = "true" ] && [ -s "$archive" ]; then
-          echo "restoring /opt/local from $archive"
-          sudo tar -xzf "$archive" -C /
-        fi
-
-        if [ -x /opt/local/bin/port ]; then
-          echo "MacPorts base already present"
-        else
-          echo "installing MacPorts base"
+        install_from_package() {
+          echo "installing MacPorts base from the package"
           curl -fsSL -o "$RUNNER_TEMP/macports.pkg" "${{ steps.resolve.outputs.url }}"
           sudo installer -pkg "$RUNNER_TEMP/macports.pkg" -target /
+        }
+
+        if [ "${{ steps.restore.outputs.cache-hit }}" = "true" ] && [ -s "$archive" ]; then
+          # Verify before extracting: a truncated cache entry would otherwise leave a
+          # half-restored /opt/local that only fails later, in an unrelated step.
+          if gzip -t "$archive" 2>/dev/null; then
+            echo "restoring /opt/local from $archive"
+            sudo tar -xzf "$archive" -C /
+          else
+            echo "::warning::cached base archive is corrupt, discarding it"
+            rm -f "$archive"
+          fi
         fi
+
+        if [ ! -x /opt/local/bin/port ]; then install_from_package; fi
         [ -x /opt/local/bin/port ] || { echo "::error::MacPorts base is not usable"; exit 1; }
+
+        # A restore can unpack cleanly and still be unusable, so smoke-test the base and
+        # fall back to the package rather than let a later step fail inexplicably.
+        if base_version="$(port version 2>&1)"; then
+          echo "$base_version"
+        else
+          echo "::warning::restored base is not usable ($base_version), installing from the package"
+          install_from_package
+        fi
 
         # Save the base as it is right now: no ports tree sync, no installed ports.
         if [ ! -s "$archive" ]; then

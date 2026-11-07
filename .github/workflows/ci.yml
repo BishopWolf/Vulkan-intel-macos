@@ -52,7 +52,19 @@ jobs:
       - name: Register the overlay ahead of macports-ports
         run: |
           set -euo pipefail
-          sudo port -q sync
+          # A failing step only reports "Process completed with exit code 1" in its
+          # annotation, and the raw log needs auth to read, so make every failure say
+          # which command died and where.
+          trap 'rc=$?; echo "::error::failed at line $LINENO (exit $rc): $BASH_COMMAND"' ERR
+          # This is the only network step in the job and rsync.macports.org does flake;
+          # a transient failure should not cost a whole red run.
+          synced=0
+          for attempt in 1 2 3; do
+            if sudo port -q sync; then synced=1; break; fi
+            echo "::warning::port sync attempt $attempt failed, retrying"
+            sleep $((attempt * 15))
+          done
+          [ "$synced" = 1 ] || { echo "::error::port sync failed three times"; exit 1; }
           # MacPorts resolves a duplicate port name to the FIRST source listed in
           # sources.conf - that file's own header says so. Appending a file:// entry
           # (what the MacPorts guide shows for a throwaway local test) therefore never
@@ -68,8 +80,12 @@ jobs:
           sudo tee "$sources" < "$tmp" >/dev/null
           echo "--- sources.conf ---"
           grep -nE '^file://|\[default\]' "$sources"
-          portindex -f ports
-          port -q info --fullname vulkan-tools
+          grep -qF "$entry" "$sources" \
+            || { echo "::error::overlay entry missing from $sources after writing it"; exit 1; }
+          portindex -f ports \
+            || { echo "::error::portindex rejected the overlay Portfiles"; exit 1; }
+          port -q info --fullname vulkan-tools \
+            || { echo "::error::vulkan-tools is not resolved through the overlay"; exit 1; }
 
       - name: The overridden ports resolve to this overlay
         run: |
@@ -139,7 +155,14 @@ jobs:
       - name: Register the overlay ahead of macports-ports
         run: |
           set -euo pipefail
-          sudo port -q sync
+          trap 'rc=$?; echo "::error::failed at line $LINENO (exit $rc): $BASH_COMMAND"' ERR
+          synced=0
+          for attempt in 1 2 3; do
+            if sudo port -q sync; then synced=1; break; fi
+            echo "::warning::port sync attempt $attempt failed, retrying"
+            sleep $((attempt * 15))
+          done
+          [ "$synced" = 1 ] || { echo "::error::port sync failed three times"; exit 1; }
           # First source wins for a duplicate port name; see the note in the other job.
           entry="file://$GITHUB_WORKSPACE/ports [nosync]"
           sources=/opt/local/etc/macports/sources.conf

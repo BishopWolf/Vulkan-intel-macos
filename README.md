@@ -98,6 +98,15 @@ available until August 2027):
 The full build job is deliberately not on every push: building MoltenVK plus the
 validation layers from source takes around half an hour.
 
+Two CI details that cost a run each to learn:
+
+- the actions must be `checkout@v6` / `upload-artifact@v7`. GitHub removed the Node 20
+  runtime from hosted runners on 2026-09-23, so `@v4` fails with `Node 20 is not
+  supported`, and `upload-artifact@v5` is still Node 20 — its first Node 24 major is v6;
+- `PATH` is set at job level. The MacPorts installer adds `/opt/local/bin` through
+  `/etc/paths.d`, which only applies to shells started afterwards; without the explicit
+  `PATH`, the first `port` call after installing exits 127.
+
 ## Verified results
 
 On a real Intel Mac (macOS 15, MacPorts 2.12.7, Vulkan 1.4.363, MoltenVK 1.4.2,

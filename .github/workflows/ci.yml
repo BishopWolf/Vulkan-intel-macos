@@ -18,13 +18,25 @@ concurrency:
 # macos-15-intel is the last x86_64 runner image GitHub offers (until August 2027).
 # There is no arm64 job: on Apple Silicon this repository does not apply, and
 # scripts/install.sh and tests/run_tests.sh abort there by design.
+#
+# Action versions: GitHub removed the Node 20 runtime from hosted runners on
+# 2026-09-23, so every JavaScript action must declare node24. checkout@v5+ and
+# upload-artifact@v6+ are the first Node 24 majors for each (v4 for either fails on
+# the runner with "Node 20 is not supported"). Keep this in mind when bumping.
+#
+# PATH: the MacPorts .pkg adds /opt/local/bin to /etc/paths.d, which only affects
+# shells started after the install. Each step's shell is already running, so without
+# the explicit PATH below the very next `port` call exits 127.
+env:
+  PATH: /opt/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
 jobs:
   portfiles:
     name: Portfiles and patch
     runs-on: macos-15-intel
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Require Intel
         run: |
@@ -36,14 +48,27 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL https://api.github.com/repos/macports/macports-base/releases/latest \
-            | jq -r '.assets[].browser_download_url | select(endswith(".pkg"))' > "$RUNNER_TEMP/pkgs.txt"
+            -o "$RUNNER_TEMP/macports.json"
           major="$(sw_vers -productVersion | cut -d. -f1)"
-          url="$(grep -m1 -- "-${major}-" "$RUNNER_TEMP/pkgs.txt" || true)"
-          if [ -z "$url" ]; then url="$(head -n1 "$RUNNER_TEMP/pkgs.txt")"; fi
+          # Pick the .pkg for this macOS major (no jq on the image, and no Homebrew:
+          # Homebrew no longer supports Intel macOS).
+          url="$(python3 - "$RUNNER_TEMP/macports.json" "$major" <<'PY'
+          import json, sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              release = json.load(handle)
+          packages = [a["browser_download_url"] for a in release["assets"]
+                      if a["name"].endswith(".pkg")]
+          matching = [u for u in packages if f"-{sys.argv[2]}-" in u]
+          candidates = matching or packages
+          print(candidates[0] if candidates else "")
+          PY
+          )"
           [ -n "$url" ] || { echo "::error::no MacPorts .pkg asset in the latest release"; exit 1; }
           echo "installing $url"
           curl -fsSL -o "$RUNNER_TEMP/macports.pkg" "$url"
           sudo installer -pkg "$RUNNER_TEMP/macports.pkg" -target /
+          [ -x /opt/local/bin/port ] || { echo "::error::MacPorts installed but /opt/local/bin/port is missing"; exit 1; }
           port version
 
       - name: Register the overlay above macports-ports
@@ -51,7 +76,7 @@ jobs:
           set -euo pipefail
           sudo port -q sync
           echo "file://$GITHUB_WORKSPACE/ports" | sudo tee -a /opt/local/etc/macports/sources.conf
-          portindex ports
+          portindex -f ports
           port -q info --revision vulkan-tools
 
       - name: The overridden ports resolve to this overlay
@@ -76,9 +101,14 @@ jobs:
         run: |
           set -euo pipefail
           sudo port -q extract vulkan-tools
-          src="$(sudo port -q work vulkan-tools)"
-          src="$src/$(ls "$src" | grep -m1 'Vulkan-Tools')"
-          [ -d "$src" ] || { echo "::error::could not find the extracted Vulkan-Tools source under $src"; exit 1; }
+          # Locate the source root by its vulkaninfo directory rather than assuming the
+          # archive's top-level name (the tag is vulkan-sdk-1.4.363.0, the distfile is
+          # Vulkan-Tools-1.4.363.0).
+          src="$(find /opt/local/var/macports/build -maxdepth 5 -type d -name vulkaninfo \
+                    -path '*vulkan-tools*' 2>/dev/null | head -1)"
+          [ -n "$src" ] || { echo "::error::extracted Vulkan-Tools source not found"; exit 1; }
+          src="$(dirname "$src")"
+          echo "source root: $src"
           patch -p1 --dry-run --directory "$src" \
             --input "$GITHUB_WORKSPACE/ports/graphics/vulkan-tools/files/patch-vulkaninfo-layered-api-sType.diff"
 
@@ -89,7 +119,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Require Intel
         run: |
@@ -99,13 +129,24 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL https://api.github.com/repos/macports/macports-base/releases/latest \
-            | jq -r '.assets[].browser_download_url | select(endswith(".pkg"))' > "$RUNNER_TEMP/pkgs.txt"
+            -o "$RUNNER_TEMP/macports.json"
           major="$(sw_vers -productVersion | cut -d. -f1)"
-          url="$(grep -m1 -- "-${major}-" "$RUNNER_TEMP/pkgs.txt" || true)"
-          if [ -z "$url" ]; then url="$(head -n1 "$RUNNER_TEMP/pkgs.txt")"; fi
+          url="$(python3 - "$RUNNER_TEMP/macports.json" "$major" <<'PY'
+          import json, sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              release = json.load(handle)
+          packages = [a["browser_download_url"] for a in release["assets"]
+                      if a["name"].endswith(".pkg")]
+          matching = [u for u in packages if f"-{sys.argv[2]}-" in u]
+          candidates = matching or packages
+          print(candidates[0] if candidates else "")
+          PY
+          )"
           [ -n "$url" ] || { echo "::error::no MacPorts .pkg asset in the latest release"; exit 1; }
           curl -fsSL -o "$RUNNER_TEMP/macports.pkg" "$url"
           sudo installer -pkg "$RUNNER_TEMP/macports.pkg" -target /
+          [ -x /opt/local/bin/port ] || { echo "::error::MacPorts installed but /opt/local/bin/port is missing"; exit 1; }
           port version
 
       - name: Register the overlay above macports-ports
@@ -113,7 +154,7 @@ jobs:
           set -euo pipefail
           sudo port -q sync
           echo "file://$GITHUB_WORKSPACE/ports" | sudo tee -a /opt/local/etc/macports/sources.conf
-          portindex ports
+          portindex -f ports
 
       - name: Install from source
         run: |
@@ -124,12 +165,11 @@ jobs:
       - name: Test the installed stack
         run: |
           set -euo pipefail
-          export PATH="/opt/local/bin:$PATH"
           ./tests/run_tests.sh
 
       - name: Upload MacPorts logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macports-logs
           path: /opt/local/var/macports/logs

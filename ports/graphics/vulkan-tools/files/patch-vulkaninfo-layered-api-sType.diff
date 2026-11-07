@@ -1,0 +1,18 @@
+diff --git a/vulkaninfo/generated/vulkaninfo.hpp b/vulkaninfo/generated/vulkaninfo.hpp
+index 23e2da1..0f80385 100644
+--- a/vulkaninfo/generated/vulkaninfo.hpp
++++ b/vulkaninfo/generated/vulkaninfo.hpp
+@@ -9653,6 +9653,13 @@ bool prepare_phys_device_props2_twocall_chain_vectors(std::unique_ptr<phys_devic
+         chain->PhysicalDeviceLayeredApiPropertiesListKHR.layeredApiCount);
+     chain->PhysicalDeviceLayeredApiPropertiesListKHR.pLayeredApis =
+         chain->VkPhysicalDeviceLayeredApiPropertiesListKHR_pLayeredApis.data();
++    // VUID-VkPhysicalDeviceLayeredApiPropertiesKHR-sType-sType: pLayeredApis is an
++    // array supplied by the caller, and every element must carry its own sType. The
++    // LIST struct above is initialised; its elements were not.
++    for (VkPhysicalDeviceLayeredApiPropertiesKHR &layeredApi :
++         chain->VkPhysicalDeviceLayeredApiPropertiesListKHR_pLayeredApis) {
++        layeredApi.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_PROPERTIES_KHR;
++    }
+     chain->VkPhysicalDeviceVulkan14Properties_pCopySrcLayouts.resize(chain->PhysicalDeviceVulkan14Properties.copySrcLayoutCount);
+     chain->PhysicalDeviceVulkan14Properties.pCopySrcLayouts = chain->VkPhysicalDeviceVulkan14Properties_pCopySrcLayouts.data();
+     chain->VkPhysicalDeviceVulkan14Properties_pCopyDstLayouts.resize(chain->PhysicalDeviceVulkan14Properties.copyDstLayoutCount);

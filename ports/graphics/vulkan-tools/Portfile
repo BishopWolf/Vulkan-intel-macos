@@ -1,0 +1,69 @@
+# -*- coding: utf-8; mode: tcl; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- vim:fenc=utf-8:ft=tcl:et:sw=4:ts=4:sts=4
+PortSystem          1.0
+PortGroup           github 1.0
+PortGroup           cmake 1.1
+
+# Overlay of the macports-ports 'vulkan-tools' port (graphics/vulkan-tools).
+#
+# Difference from upstream: patchfiles, which make vulkaninfo initialise the sType
+# of each VkPhysicalDeviceLayeredApiPropertiesKHR it hands to
+# vkGetPhysicalDeviceProperties2. Without that, enabling VK_LAYER_KHRONOS_validation
+# on every Intel Mac reports, once per physical device:
+#
+#   pProperties->pNext<VkPhysicalDeviceLayeredApiPropertiesListKHR>
+#       .pLayeredApis[0].sType must be
+#       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_PROPERTIES_KHR
+#
+# i.e. VUID-VkPhysicalDeviceLayeredApiPropertiesKHR-sType-sType. Upstream vulkaninfo
+# resizes the pLayeredApis array and sets the outer LIST sType, but never the element
+# sType (still true on Vulkan-Tools main as of the 1.4.368 headers).
+#
+# revision 1 is load-bearing: MacPorts matches prebuilt binary archives on
+# name+version+revision+variant, so leaving revision at 0 would let the official
+# unpatched archive satisfy the requirement and silently skip the patch.
+
+github.setup        KhronosGroup Vulkan-Tools 1.4.363.0 vulkan-sdk-
+github.tarball_from archive
+name                vulkan-tools
+revision            1
+categories          graphics
+license             Apache-2
+maintainers         nomaintainer
+description         Vulkan tools with the layered-API sType fix
+long_description    Provides the vulkaninfo command, patched so that it passes \
+                    valid pLayeredApis array elements to \
+                    vkGetPhysicalDeviceProperties2.
+homepage            https://vulkan.lunarg.com
+
+checksums           rmd160  6037c6326f751b9ebd86b0e1f0e4e857202f2005 \
+                    sha256  6cbeb83294434e636a0c78760f1a6dfe3e50c1bab0cffa154603ce73e70508f1 \
+                    size    821847
+
+depends_build-append \
+                    port:vulkan-headers \
+                    port:vulkan-volk \
+                    path:bin/glslang:glslang \
+                    path:bin/glslc:shaderc
+depends_lib-append  port:vulkan-loader
+
+patchfiles-append   patch-vulkaninfo-layered-api-sType.diff
+# git-style diff, so strip the a/ and b/ prefixes (MacPorts defaults to -p0).
+patch.pre_args      -p1
+
+cmake.build_type    Release
+
+set py_ver 3.14
+set py_ver_nodot [string map {. {}} ${py_ver}]
+foreach stage {configure build destroot test} {
+    ${stage}.env-append PATH=${frameworks_dir}/Python.framework/Versions/${py_ver}/bin:$env(PATH)
+}
+depends_build-append port:python${py_ver_nodot}
+
+# DTOOLS_CODEGEN=ON regenerates vulkaninfo/generated/vulkaninfo.hpp during the build
+# and would throw the patch away, so use the generated sources shipped in the tarball.
+configure.args-append \
+                    -DBUILD_CUBE=OFF \
+                    -DBUILD_ICD=OFF \
+                    -DDTOOLS_VULKANINFO=ON \
+                    -DDTOOLS_CODEGEN=OFF \
+                    -DVULKAN_LOADER_INSTALL_DIR=${prefix}

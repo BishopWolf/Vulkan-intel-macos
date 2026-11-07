@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"     # weekly: the full from-source port build and tests
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# macos-15-intel is the last x86_64 runner image GitHub offers (until August 2027).
+# There is no arm64 job: on Apple Silicon this repository does not apply, and
+# scripts/install.sh and tests/run_tests.sh abort there by design.
+jobs:
+  portfiles:
+    name: Portfiles and patch
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require Intel
+        run: |
+          arch="$(uname -m)"
+          echo "runner arch: $arch"
+          [ "$arch" = "x86_64" ] || { echo "::error::this repository is Intel-only"; exit 1; }
+
+      - name: Install MacPorts base
+        run: |
+          set -euo pipefail
+          curl -fsSL https://api.github.com/repos/macports/macports-base/releases/latest \
+            | jq -r '.assets[].browser_download_url | select(endswith(".pkg"))' > "$RUNNER_TEMP/pkgs.txt"
+          major="$(sw_vers -productVersion | cut -d. -f1)"
+          url="$(grep -m1 -- "-${major}-" "$RUNNER_TEMP/pkgs.txt" || true)"
+          if [ -z "$url" ]; then url="$(head -n1 "$RUNNER_TEMP/pkgs.txt")"; fi
+          [ -n "$url" ] || { echo "::error::no MacPorts .pkg asset in the latest release"; exit 1; }
+          echo "installing $url"
+          curl -fsSL -o "$RUNNER_TEMP/macports.pkg" "$url"
+          sudo installer -pkg "$RUNNER_TEMP/macports.pkg" -target /
+          port version
+
+      - name: Register the overlay above macports-ports
+        run: |
+          set -euo pipefail
+          sudo port -q sync
+          echo "file://$GITHUB_WORKSPACE/ports" | sudo tee -a /opt/local/etc/macports/sources.conf
+          portindex ports
+          port -q info --revision vulkan-tools
+
+      - name: The overridden ports resolve to this overlay
+        run: |
+          set -euo pipefail
+          status=0
+          check_revision() {
+            got="$(port -q info --revision "$1" | awk '{print $2}')"
+            if [ "$got" != "1" ]; then
+              echo "::error::$1 has revision '$got', expected 1: macports-ports is winning over the overlay"
+              status=1
+            else
+              echo "OK  $1 revision 1 (overlay in effect)"
+            fi
+          }
+          check_revision vulkan-tools
+          check_revision vulkan-validationlayers
+          check_revision vulkan-utility-libraries
+          exit "$status"
+
+      - name: Patch applies to the pinned tarball
+        run: |
+          set -euo pipefail
+          sudo port -q extract vulkan-tools
+          src="$(sudo port -q work vulkan-tools)"
+          src="$src/$(ls "$src" | grep -m1 'Vulkan-Tools')"
+          [ -d "$src" ] || { echo "::error::could not find the extracted Vulkan-Tools source under $src"; exit 1; }
+          patch -p1 --dry-run --directory "$src" \
+            --input "$GITHUB_WORKSPACE/ports/graphics/vulkan-tools/files/patch-vulkaninfo-layered-api-sType.diff"
+
+  install:
+    name: Build ports from source and test
+    needs: portfiles
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: macos-15-intel
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require Intel
+        run: |
+          [ "$(uname -m)" = "x86_64" ] || { echo "::error::this repository is Intel-only"; exit 1; }
+
+      - name: Install MacPorts base
+        run: |
+          set -euo pipefail
+          curl -fsSL https://api.github.com/repos/macports/macports-base/releases/latest \
+            | jq -r '.assets[].browser_download_url | select(endswith(".pkg"))' > "$RUNNER_TEMP/pkgs.txt"
+          major="$(sw_vers -productVersion | cut -d. -f1)"
+          url="$(grep -m1 -- "-${major}-" "$RUNNER_TEMP/pkgs.txt" || true)"
+          if [ -z "$url" ]; then url="$(head -n1 "$RUNNER_TEMP/pkgs.txt")"; fi
+          [ -n "$url" ] || { echo "::error::no MacPorts .pkg asset in the latest release"; exit 1; }
+          curl -fsSL -o "$RUNNER_TEMP/macports.pkg" "$url"
+          sudo installer -pkg "$RUNNER_TEMP/macports.pkg" -target /
+          port version
+
+      - name: Register the overlay above macports-ports
+        run: |
+          set -euo pipefail
+          sudo port -q sync
+          echo "file://$GITHUB_WORKSPACE/ports" | sudo tee -a /opt/local/etc/macports/sources.conf
+          portindex ports
+
+      - name: Install from source
+        run: |
+          set -euo pipefail
+          sudo port -s -N -v install vulkan-tools vulkan-validationlayers MoltenVK
+          port -q installed | grep -E '^(vulkan-(tools|validationlayers|utility-libraries)|MoltenVK)'
+
+      - name: Test the installed stack
+        run: |
+          set -euo pipefail
+          export PATH="/opt/local/bin:$PATH"
+          ./tests/run_tests.sh
+
+      - name: Upload MacPorts logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macports-logs
+          path: /opt/local/var/macports/logs
+          retention-days: 7
+          if-no-files-found: ignore
